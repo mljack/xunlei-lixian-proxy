@@ -80,7 +80,7 @@ class HTTPConnection(_HTTPConnection):
         if self.request.on_headers_callback:
             self.io_loop.add_callback(self.request.on_headers_callback, self.code, self.headers)
         if self.request.raw_streaming_callback:
-            #self.stream = patch_iostream(self.stream)
+            self.stream = patch_iostream(self.stream)
             chunk_size = 256*1024
             self.stream.max_buffer_size = 32*1024*1024
             def raw_streaming_callback(data):
@@ -88,8 +88,8 @@ class HTTPConnection(_HTTPConnection):
                 if self.stream.closed():
                     self._on_body(b"")
             def read_more():
-                if self.stream._read_buffer_size < chunk_size*4:
-                    ready_callback()
+                ready_callback()
+
             def ready_callback():
                 print "ready_callback", self.stream.closed(), self.stream.reading(), self.stream._read_buffer_size
                 if not self.stream.closed() and not self.stream.reading():
