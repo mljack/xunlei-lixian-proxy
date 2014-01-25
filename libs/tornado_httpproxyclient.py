@@ -7,6 +7,7 @@
 
 from tornado.simple_httpclient import SimpleAsyncHTTPClient, _HTTPConnection, native_str, re, HTTPHeaders
 from time import sleep
+import sys
 
 class HTTPProxyClient(SimpleAsyncHTTPClient):
     def __init__(self, *args, **kwargs):
@@ -14,11 +15,17 @@ class HTTPProxyClient(SimpleAsyncHTTPClient):
         self._closed = False
 
     def close(self):
+        print("HTTPProxyClient.close()")
+        sys.stdout.flush()              # affect execution order/behavior?
+        self.connection.stream.close()
+        self.connection._on_body(b"")   # todo: it's wrong when there's no header yet.
+        self.connection._on_close()
+        
         super(HTTPProxyClient, self).close()
         self._closed = True
 
     def _handle_request(self, request, release_callback, final_callback):
-        HTTPConnection(self.io_loop, self, request, release_callback,
+        self.connection = HTTPConnection(self.io_loop, self, request, release_callback,
                        final_callback, self.max_buffer_size, self.resolver)
 
 class HTTPConnection(_HTTPConnection):
