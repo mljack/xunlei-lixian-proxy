@@ -5,9 +5,14 @@
 #         http://binux.me
 # Created on 2013-11-09 22:42:57
 
+from __future__ import print_function
 from tornado.simple_httpclient import SimpleAsyncHTTPClient, _HTTPConnection, native_str, re, HTTPHeaders
-from time import sleep
+from time import sleep, clock
 import sys
+
+def printf(str, *args):
+    print(str % args, end='')
+    sys.stdout.flush()
 
 class HTTPProxyClient(SimpleAsyncHTTPClient):
     def __init__(self, *args, **kwargs):
@@ -98,7 +103,7 @@ class HTTPConnection(_HTTPConnection):
                 ready_callback()
 
             def ready_callback():
-                print "ready_callback", self.stream.closed(), self.stream.reading(), self.stream._read_buffer_size
+                #print "ready_callback", self.stream.closed(), self.stream.reading(), self.stream._read_buffer_size
                 if not self.stream.closed() and not self.stream.reading():
                     #self.stream._read_to_buffer()
                     self.stream.read_bytes(chunk_size, lambda x: x, raw_streaming_callback)
@@ -114,34 +119,63 @@ class HTTPConnection(_HTTPConnection):
                 self.stream.read_bytes(content_length, self._on_body)
             else:
                 self.stream.read_until_close(self._on_body)
-
-        
-import socket
+       
 def patch_iostream(iostream):
     self = iostream
+    self.n = 0;
     self.max_buffer_size = 32*1024*1024
-    self.buffer_limit = 16*1024*1024
+    self.buffer_limit = 1*1024*1024
+    self.bytes_recevied = 0
+    self.bytes_sent = 0
+    self.bytes_recevied_recently = 0
+    self.bytes_sent_recently = 0
+    self.time_interval_of_average_speed = 1.0
+    self.recent_interval_start_time = clock()
+    self.sending_Bps = 0.0
+    self.receiving_Bps = 0.0
+    self.original_read_to_buffer = self._read_to_buffer
+    self.original_consume = self._consume
+
+    def measureSpeed(full):
+        now = clock()
+        seconds_elapsed = now - self.recent_interval_start_time
+        if seconds_elapsed >= self.time_interval_of_average_speed:
+            self.receiving_Bps = self.bytes_recevied_recently/seconds_elapsed/1024.0
+            self.sending_Bps = self.bytes_sent_recently/seconds_elapsed/1024.0
+            #printf(" R byte %d   time %f \n",self.bytes_recevied_recently, seconds_elapsed)
+            #printf(" S byte %d   time %f \n",self.bytes_sent_recently, seconds_elapsed)
+            self.recent_interval_start_time = now
+            self.bytes_recevied_recently = 0
+            self.bytes_sent_recently = 0
+        if full:
+            self.n = (self.n + 1) % 10
+            printf("Full%s%s  ", "."*self.n, " "*(10-self.n))
+            sleep(0.3)
+        else:
+            self.n = 0
+            printf("                ")
+        printf("%10d %10d %10d %8.1f %8.1f     \r", self._read_buffer_size, self.bytes_recevied, self.bytes_sent, self.receiving_Bps, self.sending_Bps)
+
     def _read_to_buffer():
         if self._read_buffer_size >= self.buffer_limit:
-            sleep(0.3)
+            measureSpeed(True)
             return 0
-        try:
-            chunk = self.read_from_fd()
-        except (socket.error, IOError, OSError) as e:
-            # ssl.SSLError is a subclass of socket.error
-            if e.args[0] == errno.ECONNRESET:
-                # Treat ECONNRESET as a connection close rather than
-                # an error to minimize log spam  (the exception will
-                # be available on self.error for apps that care).
-                self.close(exc_info=True)
-                return
-            self.close(exc_info=True)
-            raise
-        if chunk is None:
-            return 0
-        self._read_buffer.append(chunk)
-        self._read_buffer_size += len(chunk)
+        length = self.original_read_to_buffer()
+        self.bytes_recevied += length
+        self.bytes_recevied_recently += length
+        measureSpeed(False)
+        #printf("+ %10d\n", length)
+        return length
 
-        return len(chunk)
+    def _consume(loc):
+        buf = self.original_consume(loc)
+        length = len(buf)
+        self.bytes_sent += length
+        self.bytes_sent_recently += length
+        measureSpeed(False)
+        #printf("- %10d\n", length)
+        return buf
+
     self._read_to_buffer = _read_to_buffer
+    self._consume = _consume
     return iostream
