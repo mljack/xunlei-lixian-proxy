@@ -6,6 +6,7 @@
 # Created on 2013-11-09 22:42:57
 
 from tornado.simple_httpclient import SimpleAsyncHTTPClient, _HTTPConnection, native_str, re, HTTPHeaders
+from time import sleep
 
 class HTTPProxyClient(SimpleAsyncHTTPClient):
     def __init__(self, *args, **kwargs):
@@ -82,7 +83,6 @@ class HTTPConnection(_HTTPConnection):
         if self.request.raw_streaming_callback:
             self.stream = patch_iostream(self.stream)
             chunk_size = 256*1024
-            self.stream.max_buffer_size = 32*1024*1024
             def raw_streaming_callback(data):
                 self.request.raw_streaming_callback(data, read_more)
                 if self.stream.closed():
@@ -112,8 +112,11 @@ class HTTPConnection(_HTTPConnection):
 import socket
 def patch_iostream(iostream):
     self = iostream
+    self.max_buffer_size = 32*1024*1024
+    self.buffer_limit = 16*1024*1024
     def _read_to_buffer():
-        if self._read_buffer_size >= self.max_buffer_size:
+        if self._read_buffer_size >= self.buffer_limit:
+            sleep(0.3)
             return 0
         try:
             chunk = self.read_from_fd()
@@ -131,8 +134,7 @@ def patch_iostream(iostream):
             return 0
         self._read_buffer.append(chunk)
         self._read_buffer_size += len(chunk)
-        if self._read_buffer_size >= self.max_buffer_size:
-            return 0
+
         return len(chunk)
     self._read_to_buffer = _read_to_buffer
     return iostream
