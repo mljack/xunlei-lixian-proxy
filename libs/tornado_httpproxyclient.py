@@ -14,19 +14,36 @@ def printf(str, *args):
     print(str % args, end='')
     sys.stdout.flush()
 
-class HTTPProxyClient(SimpleAsyncHTTPClient):
+class HTTPProxyClient:
+    def __init__(self):
+        self.client = MyHTTPClient()
+        self.request = None
+
+    def fetch(self, request, callback=None):
+        self.request = request
+        self.raw_streaming_callback = self.request.raw_streaming_callback
+        def my_raw_streaming_callback(data, ready_callback):
+            self.raw_streaming_callback(data, ready_callback)
+        self.request.my_raw_streaming_callback = my_raw_streaming_callback
+
+        self.client.fetch(self.request, callback)
+
+    def close(self):
+        self.client.close()
+
+class MyHTTPClient(SimpleAsyncHTTPClient):
     def __init__(self, *args, **kwargs):
-        super(HTTPProxyClient, self).__init__(*args, **kwargs)
+        super(MyHTTPClient, self).__init__(*args, **kwargs)
         self._closed = False
 
     def close(self):
-        print("HTTPProxyClient.close()")
+        print("MyHTTPClient.close()")
         sys.stdout.flush()              # affect execution order/behavior?
         self.connection.stream.close()
         self.connection._on_body(b"")   # todo: it's wrong when there's no header yet.
         self.connection._on_close()
         
-        super(HTTPProxyClient, self).close()
+        super(MyHTTPClient, self).close()
         self._closed = True
 
     def _handle_request(self, request, release_callback, final_callback):
@@ -92,11 +109,11 @@ class HTTPConnection(_HTTPConnection):
 
         if self.request.on_headers_callback:
             self.io_loop.add_callback(self.request.on_headers_callback, self.code, self.headers)
-        if self.request.raw_streaming_callback:
+        if self.request.my_raw_streaming_callback:
             self.stream = patch_iostream(self.stream)
             chunk_size = 256*1024
-            def raw_streaming_callback(data):
-                self.request.raw_streaming_callback(data, read_more)
+            def connection_raw_streaming_callback(data):
+                self.request.my_raw_streaming_callback(data, read_more)
                 if self.stream.closed():
                     self._on_body(b"")
             def read_more():
@@ -106,7 +123,7 @@ class HTTPConnection(_HTTPConnection):
                 #print "ready_callback", self.stream.closed(), self.stream.reading(), self.stream._read_buffer_size
                 if not self.stream.closed() and not self.stream.reading():
                     #self.stream._read_to_buffer()
-                    self.stream.read_bytes(chunk_size, lambda x: x, raw_streaming_callback)
+                    self.stream.read_bytes(chunk_size, lambda x: x, connection_raw_streaming_callback)
             ready_callback()
         else:
             if (self.request.use_gzip and
