@@ -16,20 +16,55 @@ def printf(str, *args):
 
 class HTTPProxyClient:
     def __init__(self):
-        self.client = MyHTTPClient()
+        self.client = None
         self.request = None
-
-    def fetch(self, request, callback=None):
-        self.request = request
-        self.raw_streaming_callback = self.request.raw_streaming_callback
-        def my_raw_streaming_callback(data, ready_callback):
-            self.raw_streaming_callback(data, ready_callback)
-        self.request.my_raw_streaming_callback = my_raw_streaming_callback
-
-        self.client.fetch(self.request, callback)
+        self.range_start = 0
+        self.range_end = None
+        self.content_length = None
+        self.content_length_callback = None
 
     def close(self):
         self.client.close()
+
+    def fetch(self, request, callback):
+        self.request = request
+        self.raw_streaming_callback = self.request.raw_streaming_callback
+        self.on_finished_callback = callback
+
+        if request.headers.has_key('Range'):
+            range = request.headers['Range'].split('=')[1].split('-')
+            self.range_start = int(range[0])
+            if len(range[1]) > 0:
+                self.range_end = int(range[1])
+        printf("Requested Range: [%d, %s]\n", self.range_start, str(self.range_end))
+
+        self.request.content_length_only = True
+        self.request.content_length_callback = self.my_content_length
+        if self.range_end is None:
+            self.client = MyHTTPClient()
+            self.client.fetch(self.request) # TODO: error handling for the range query and close this connection
+        else:
+            self.my_content_length(self.range_end - self.range_start + 1)
+
+    def my_content_length(self, content_length):
+        self.request.content_length_only = False
+       
+        self.content_length = content_length
+        printf("Content-Length: %d\n", content_length)
+
+        self.range_end = self.range_start + self.content_length - 1;
+        printf("Range: [%d, %d]\n", self.range_start, self.range_end)
+
+        def my_raw_streaming_callback(data, ready_callback):
+            self.raw_streaming_callback(data, ready_callback)
+        self.request.my_raw_streaming_callback = my_raw_streaming_callback
+        
+        #if not self.client.closed():
+        #    self.client.close()
+
+        self.request.headers['Range'] = 'bytes=' + str(self.range_start) + '-' + str(self.range_end)
+        self.client = MyHTTPClient()
+        self.client.fetch(self.request, self.on_finished_callback)
 
 class MyHTTPClient(SimpleAsyncHTTPClient):
     def __init__(self, *args, **kwargs):
@@ -83,7 +118,11 @@ class HTTPConnection(_HTTPConnection):
                 self.headers["Content-Length"] = pieces[0]
             content_length = int(self.headers["Content-Length"])
         else:
-            content_length = None
+            content_length = 0
+
+        if self.request.content_length_only:
+            self.request.content_length_callback(content_length)
+            return
 
         if self.request.header_callback is not None:
             # re-attach the newline we split on earlier
@@ -101,7 +140,7 @@ class HTTPConnection(_HTTPConnection):
             # These response codes never have bodies
             # http://www.w3.org/Protocols/rfc2616/rfc2616-sec4.html#sec4.3
             if ("Transfer-Encoding" in self.headers or
-                    content_length not in (None, 0)):
+                    content_length != 0):
                 raise ValueError("Response with code %d should not have body" %
                                  self.code)
             self._on_body(b"")
