@@ -22,13 +22,23 @@ class HTTPProxyClient:
         self.range_end = None
         self.content_length = None
         self.content_length_callback = None
+        self.pos = 0
+        self.blockSize = 256*1024
+        self.output_request = None
 
     def close(self):
         self.client.close()
 
+    def raw_streaming_callback(self, data, ready_callback):
+        if not self.output_request.connection.stream.closed():
+            self.output_request.write(data, ready_callback)
+        #self.write(data)
+        #self.flush()
+
     def fetch(self, request, callback):
         self.request = request
-        self.raw_streaming_callback = self.request.raw_streaming_callback
+        self.request.requested_content_length = 0
+        self.request.raw_streaming_callback = self.raw_streaming_callback
         self.on_finished_callback = callback
 
         if request.headers.has_key('Range'):
@@ -38,33 +48,38 @@ class HTTPProxyClient:
                 self.range_end = int(range[1])
         printf("Requested Range: [%d, %s]\n", self.range_start, str(self.range_end))
 
-        self.request.content_length_only = True
         self.request.content_length_callback = self.my_content_length
         if self.range_end is None:
             self.client = MyHTTPClient()
-            self.client.fetch(self.request) # TODO: error handling for the range query and close this connection
+            self.client.fetch(self.request) # todo: error handling for the range query
         else:
             self.my_content_length(self.range_end - self.range_start + 1)
 
     def my_content_length(self, content_length):
-        self.request.content_length_only = False
-       
+        self.request.content_length_callback = None
         self.content_length = content_length
+        self.request.requested_content_length = content_length
         printf("Content-Length: %d\n", content_length)
 
         self.range_end = self.range_start + self.content_length - 1;
         printf("Range: [%d, %d]\n", self.range_start, self.range_end)
+        self.pos = self.range_start
 
-        def my_raw_streaming_callback(data, ready_callback):
-            self.raw_streaming_callback(data, ready_callback)
-        self.request.my_raw_streaming_callback = my_raw_streaming_callback
-        
-        #if not self.client.closed():
-        #    self.client.close()
+        self.my_on_download_loop(None)
 
-        self.request.headers['Range'] = 'bytes=' + str(self.range_start) + '-' + str(self.range_end)
+    def my_on_download_loop(self, response):
+		# todo: error handling
+
+        self.request.headers['Range'] = 'bytes=' + str(self.pos) + '-' + str(self.pos + self.blockSize - 1)
+        self.pos += self.blockSize
+        printf("\nBlock Range: [%s]\n", self.request.headers['Range'])
         self.client = MyHTTPClient()
-        self.client.fetch(self.request, self.on_finished_callback)
+
+        if self.pos < 2*1024*1024:
+            self.client.fetch(self.request, self.my_on_download_loop)
+        else:
+            self.client.fetch(self.request, self.on_finished_callback)
+
 
 class MyHTTPClient(SimpleAsyncHTTPClient):
     def __init__(self, *args, **kwargs):
@@ -120,9 +135,12 @@ class HTTPConnection(_HTTPConnection):
         else:
             content_length = 0
 
-        if self.request.content_length_only:
-            self.request.content_length_callback(content_length)
+        if self.request.content_length_callback is not None:
+            self.io_loop.add_callback(self.request.content_length_callback, content_length)
+            self._on_body(b"")
             return
+        else:
+            self.headers["Content-Length"] = str(self.request.requested_content_length)
 
         if self.request.header_callback is not None:
             # re-attach the newline we split on earlier
@@ -148,18 +166,14 @@ class HTTPConnection(_HTTPConnection):
 
         if self.request.on_headers_callback:
             self.io_loop.add_callback(self.request.on_headers_callback, self.code, self.headers)
-        if self.request.my_raw_streaming_callback:
+        if self.request.raw_streaming_callback:
             self.stream = patch_iostream(self.stream)
             chunk_size = 256*1024
             def connection_raw_streaming_callback(data):
-                self.request.my_raw_streaming_callback(data, read_more)
+                self.request.raw_streaming_callback(data, ready_callback)
                 if self.stream.closed():
                     self._on_body(b"")
-            def read_more():
-                ready_callback()
-
             def ready_callback():
-                #print "ready_callback", self.stream.closed(), self.stream.reading(), self.stream._read_buffer_size
                 if not self.stream.closed() and not self.stream.reading():
                     #self.stream._read_to_buffer()
                     self.stream.read_bytes(chunk_size, lambda x: x, connection_raw_streaming_callback)

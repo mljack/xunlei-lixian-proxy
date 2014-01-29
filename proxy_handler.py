@@ -53,7 +53,7 @@ class ProxyHandler(tornado.web.RequestHandler):
             once_set.add(response_data['once'])
 
 
-        request = tornado.httpclient.HTTPRequest(**data)
+        request = tornado.httpclient.HTTPRequest(url=data['url'], headers=data['headers'])
         for each in forward_headers:
             if each in self.request.headers:
                 request.headers[each] = self.request.headers[each]
@@ -70,15 +70,10 @@ class ProxyHandler(tornado.web.RequestHandler):
             if 'overwrite_headers' in response_data:
                 self._headers.update(response_data['overwrite_headers'])
             self.flush()
-        def raw_streaming_callback(data, ready_callback):
-            if not self.request.connection.stream.closed():
-                self.request.write(data, ready_callback)
-            #self.write(data)
-            #self.flush()
         request.on_headers_callback = on_header_callback
-        request.raw_streaming_callback = raw_streaming_callback
 
         self.http_proxy_client = HTTPProxyClient()
+        self.http_proxy_client.output_request = self.request;
         self.http_proxy_client.fetch(request, self.on_finished)
 
     def on_finished(self, response):
