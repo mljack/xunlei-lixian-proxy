@@ -8,8 +8,8 @@
 import json
 import tornado
 import tornado.web
-import tornado.httpclient
-from libs.tornado_httpproxyclient import HTTPProxyClient
+from libs.tornado_httpproxyclient import MultiHTTPProxyClient
+
 
 response_kwargs = ('overwrite_headers', 'del_headers', 'once', )
 forward_headers = ('Range', 'User-Agent', )
@@ -52,15 +52,12 @@ class ProxyHandler(tornado.web.RequestHandler):
                 return
             once_set.add(response_data['once'])
 
+        def patch_request(request):
+            for each in forward_headers:
+                if each in self.request.headers:
+                    request.headers[each] = self.request.headers[each]
 
-        request = tornado.httpclient.HTTPRequest(url=data['url'], headers=data['headers'])
-        for each in forward_headers:
-            if each in self.request.headers:
-                request.headers[each] = self.request.headers[each]
-        #request.connect_timeout = 0
-        request.request_timeout = 0
-
-        def on_header_callback(code, headers):
+        def on_headers_callback(code, headers, callback):
             self.set_status(code)
             self._headers = headers
             if 'del_headers' in response_data:
@@ -70,11 +67,10 @@ class ProxyHandler(tornado.web.RequestHandler):
             if 'overwrite_headers' in response_data:
                 self._headers.update(response_data['overwrite_headers'])
             self.flush()
-        request.on_headers_callback = on_header_callback
+            callback()
 
-        self.http_proxy_client = HTTPProxyClient()
-        self.http_proxy_client.output_request = self.request;
-        self.http_proxy_client.fetch(request, self.on_finished)
+        self.http_proxy_client = MultiHTTPProxyClient(data, self.request, patch_request, on_headers_callback)
+        self.http_proxy_client.fetch(self.on_finished)
 
     def on_finished(self, response):
         if response.code == 599:
