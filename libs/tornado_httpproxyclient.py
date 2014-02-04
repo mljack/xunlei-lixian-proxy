@@ -62,10 +62,19 @@ class MultiHTTPProxyClient:
     def close(self):
         printf("# stop #\n")
         self._closed = True
+        #for r in self.requests:
+        #    del r
+        self.requests = []
+        for b in self.blocks:
+            if b is not None:
+                b.close()
+                #del b
+        self.blocks = []
 
     def fetch(self, callback):
         self.on_finished_callback = callback
 
+        self.requests = []
         for i in range(self.num_of_connections):
             self.requests.append(self.create_request())
 
@@ -107,6 +116,7 @@ class MultiHTTPProxyClient:
     def start(self):
         printf("# start #\n")
         debug_printf("output_request: %s\n", str(self.output_request))
+        self.length_request = None
         self.next_request_pos = self.range_begin
         self.pending_write_pos = self.range_begin
 
@@ -208,7 +218,14 @@ class Block:
     def close(self):
         if not self.closed():
             self._closed = True
+            #self.parent = None
+            self.request = None
             self.http_client.close()
+            #del self.http_client
+            self.http_client = None
+            #del self.data
+            self.data = None
+            self.nextBlock = None
 
     def send(self):
         if self.parent.closed():
@@ -292,16 +309,20 @@ class MyHTTPClient(SimpleAsyncHTTPClient):
         self._closed = False
 
     def close(self):
-        print("MyHTTPClient.close()")
-        stdout.flush()              # affect execution order/behavior?
+        debug_printf("MyHTTPClient.close()")
+        if self._closed:
+            return
+
         self._closed = True
-        self.connection.stream.close()
         try:
+            self.connection.stream.close()
             self.connection._on_body(b"")   # todo: it's wrong when there's no header yet.
             self.connection._on_close()
         except Exception:
-            print("exception catched\n")
-        super(MyHTTPClient, self).close()
+            print("exception catched")
+        finally:
+            self.connection = None
+            super(MyHTTPClient, self).close()
 
     def _handle_request(self, request, release_callback, final_callback):
         self.connection = HTTPConnection(self.io_loop, self, request, release_callback,

@@ -9,6 +9,7 @@ import json
 import tornado
 import tornado.web
 from libs.tornado_httpproxyclient import MultiHTTPProxyClient
+import gc
 
 
 response_kwargs = ('overwrite_headers', 'del_headers', 'once', )
@@ -84,6 +85,7 @@ class ProxyHandler(tornado.web.RequestHandler):
     def on_connection_close(self):
         self.http_proxy_client.close()
         self.http_proxy_client = None
+        gc.collect()
 
 def run(port=8886, bind='127.0.0.1'):
     application = tornado.web.Application([
