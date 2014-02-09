@@ -29,6 +29,7 @@ class MultiHTTPProxyClient:
         self.block_size = 1000000
         self.num_of_connections = 8
         self.num_of_blocks = 16
+        self.slow_start_connection_limit = 2
         self.http_client = None
         self.range_begin = 0
         self.range_end = None
@@ -37,7 +38,7 @@ class MultiHTTPProxyClient:
         self.pending_write_pos = None
         self.length_request = None
         self.requests = []
-        self.blocks = [None] * self.num_of_blocks
+        self.blocks = []
         self.block_finished_callback = None
         self.head_block = None
         self.tail_block = None
@@ -120,8 +121,9 @@ class MultiHTTPProxyClient:
         self.next_request_pos = self.range_begin
         self.pending_write_pos = self.range_begin
 
+        self.blocks = []
         for i in range(self.num_of_blocks):
-            self.blocks[i] = Block(i, self, self.schedule_callback)
+            self.blocks.append(Block(i, self, self.schedule_callback))
         for i in range(self.num_of_blocks):
             self.blocks[i].nextBlock = self.blocks[(i+1) % self.num_of_blocks]
         self.head_block = self.blocks[self.num_of_blocks-1]
@@ -136,7 +138,7 @@ class MultiHTTPProxyClient:
             head_tail_or_sep = "(" if b == self.head_block else ")" if b.nextBlock == self.tail_block else " "
             printf("%s%s", stat, head_tail_or_sep)
         seconds_elapsed = clock() - self.start_tick
-        estimated_Bps = self.pending_write_pos/seconds_elapsed
+        estimated_Bps = (self.pending_write_pos - self.range_begin)/seconds_elapsed
         remaining_seconds = 0.0 if estimated_Bps == 0 else max(0, self.range_end - self.pending_write_pos)/estimated_Bps
         printf("   %8.1f KB/s %4.0f mins %2.0f seconds\r", estimated_Bps/1024.0, remaining_seconds/60, remaining_seconds%60)
 
@@ -159,6 +161,10 @@ class MultiHTTPProxyClient:
             return False
         if not self.requests:
             debug_printf("All connection slots are downloading. Wait...\n")
+            return False
+
+        if self.num_of_connections - len(self.requests) + 1 > self.slow_start_connection_limit:
+            debug_printf("\n ## Slow start. seq: %d  connections: %d\n\n", self.seq, self.num_of_connections - len(self.requests))
             return False
 
         if self.next_request_pos > self.range_end:
@@ -294,6 +300,8 @@ class Block:
         if self.parent.closed():
             debug_printf("Disconnected. No more in stream.\n")
             return
+        if self.parent.slow_start_connection_limit < self.parent.num_of_connections:
+            self.parent.slow_start_connection_limit += 1
         self.parent.requests.append(self.request)
         self.request = None
         self.data = data
